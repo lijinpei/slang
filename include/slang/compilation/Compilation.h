@@ -96,6 +96,9 @@ struct CompilationOptions {
     /// top modules in the design. If empty, this will be automatically determined
     /// based on which modules are unreferenced elsewhere.
     flat_hash_set<string_view> topModules;
+
+    std::optional<std::string> dumpMacros;
+    std::optional<std::string> dumpParameters;
 };
 
 /// A centralized location for creating and caching symbols. This includes

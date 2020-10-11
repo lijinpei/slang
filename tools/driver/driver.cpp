@@ -5,16 +5,17 @@
 // File is under the MIT license; see LICENSE for details
 //------------------------------------------------------------------------------
 
-#include <fstream>
-#include <iostream>
-
 #include "slang/compilation/Compilation.h"
+#include "slang/compilation/Definition.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
+#include "slang/numeric/ConstantValue.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/symbols/ASTSerializer.h"
 #include "slang/symbols/CompilationUnitSymbols.h"
 #include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/Type.h"
 #include "slang/syntax/SyntaxPrinter.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/Json.h"
@@ -23,6 +24,14 @@
 #include "slang/util/OS.h"
 #include "slang/util/String.h"
 #include "slang/util/Version.h"
+
+#include <cassert>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <variant>
+#include <vector>
 
 #if defined(INCLUDE_SIM)
 #    include "slang/codegen/JIT.h"
@@ -101,6 +110,177 @@ void printMacros(SourceManager& sourceManager, const Bag& options,
     }
 }
 
+static bool ensureFile(std::ofstream& fout, const std::string& path) {
+    fout.open(path);
+    return fout.good();
+}
+
+static bool doDumpMacros(Compilation& compilation, const std::string& path) {
+    std::ofstream fout;
+    if (!ensureFile(fout, path)) {
+        return false;
+    }
+    return true;
+}
+template <typename T>
+void dumpConstantValue(std::ofstream& fout, const T& val) {
+    fout << val;
+}
+
+void dumpConstantValue(std::ofstream&, const std::monostate&) {
+     assert(false && "impossible to have std::monostate as ConstantValue");
+}
+
+class RecursiveInstanceParameterDumper {
+    Compilation &compilation;
+    std::ofstream &fout;
+    std::vector<std::string_view> hierName;
+    int indentLevel = 4;
+    char indentChar = ' ';
+    void indent(int level = 1) {
+        level *= indentLevel;
+        while (level--) {
+            fout << indentChar;
+        }
+    }
+    void dumpHierarchicalName() {
+        bool first = true;
+        for (auto name: hierName) {
+            if (!first) {
+                fout << '.';
+            }
+            first = false;
+            fout << name;
+        }
+    }
+    bool maybeDump(const InstanceSymbol& instance) {
+        std::vector<const ParameterSymbol*> value_parameters;
+        std::vector<const TypeParameterSymbol*> type_parameters;
+        const auto& body = instance.body;
+        for (const auto& sym: body.members()) {
+            switch (sym.kind) {
+                default: {
+                    continue;
+                }
+                case SymbolKind::Parameter: {
+                    value_parameters.push_back(static_cast<const ParameterSymbol*>(&sym));
+                    break;
+                }
+                case SymbolKind::TypeParameter: {
+                    type_parameters.push_back(static_cast<const TypeParameterSymbol*>(&sym));
+                    break;
+                }
+            }
+        }
+        bool shouldDump = !value_parameters.empty() || !type_parameters.empty();
+        if (shouldDump) {
+            dumpHierarchicalName();
+            fout << '\n';
+        }
+        if (!type_parameters.empty()) {
+            indent();
+            fout << "type parameters:\n";
+            for (const auto* param: type_parameters) {
+                indent(2);
+                fout << param->name << " : " << param->targetType.getType().name << '\n';
+            }
+            fout << '\n';
+        }
+        if (!value_parameters.empty()) {
+            indent();
+            fout << "value parameters:\n";
+            for (const auto* param: value_parameters) {
+                indent(2);
+                fout << param->name << " : ";
+                std::visit([this](auto&& arg){dumpConstantValue(this->fout, arg);}, param->getValue().getVariant());
+                fout << '\n';
+            }
+        }
+        if (shouldDump) {
+            fout << '\n';
+        }
+        return true;
+    }
+    bool visitMembers(slang::iterator_range<Scope::iterator> members_range) {
+        for (const auto& sym: members_range) {
+            switch (sym.kind) {
+                default: {
+                    continue;
+                }
+                case SymbolKind::Instance: {
+                    const auto& insSym = static_cast<const InstanceSymbol &>(sym);
+                    if (!visit(insSym)) {
+                        return false;
+                    }
+                    break;
+                }
+                case SymbolKind::InstanceArray: {
+                    const auto& insSym = static_cast<const InstanceArraySymbol &>(sym);
+                    if (!visit(insSym)) {
+                        return false;
+                    }
+                    break;
+                }
+            }
+        }
+        return true;
+    }
+public:
+    RecursiveInstanceParameterDumper(Compilation& compilation, std::ofstream& fout):
+        compilation(compilation), fout(fout) {
+    }
+    bool visit(const InstanceSymbol& instance) {
+        hierName.push_back(instance.name);
+        maybeDump(instance);
+        const auto& body = instance.body;
+        visitMembers(body.members());
+        hierName.pop_back();
+        return true;
+    }
+    bool visit(const InstanceArraySymbol& instance) {
+        int32_t range = instance.range.right, range_end = instance.range.left;
+        // TODO: make sure the order matches.
+        int32_t range_delta = range < range_end ? 1 : -1;
+        const Symbol * const * ele = instance.elements.data();
+        const Symbol * const * ele_end = ele + instance.elements.size();
+        for (; range < range_end; range += range_delta, ele++) {
+                std::string ins_name = std::string(instance.name) + "[" + std::to_string(range) + "]";
+                hierName.push_back(ins_name);
+                switch((*ele)->kind) {
+                    default: {
+                        std::cerr << "unknown array instance kind: " << (*ele)->kind << '\n';
+                        assert(false);
+                        break;
+                    }
+                    case SymbolKind::Instance: {
+                        const auto& ins = static_cast<const InstanceSymbol&>(**ele);
+                        maybeDump(ins);
+                        const auto& body = ins.body;
+                        visitMembers(body.members());
+                        break;
+                    }
+                }
+                hierName.pop_back();
+        }
+        return true;
+    }
+};
+
+static bool doDumpParameters(Compilation& compilation, const std::string& path) {
+    std::ofstream fout;
+    if (!ensureFile(fout, path)) {
+        return false;
+    }
+    RecursiveInstanceParameterDumper dumper(compilation, fout);
+    auto topInstances = compilation.getRoot().topInstances;
+    for (auto inst : topInstances) {
+        if (!dumper.visit(*inst)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool runCompiler(Compilation& compilation, const std::vector<std::string>& warningOptions,
                  uint32_t errorLimit, bool quiet, bool onlyParse, bool showColors,
                  const optional<std::string>& astJsonFile) {
@@ -136,6 +316,16 @@ bool runCompiler(Compilation& compilation, const std::vector<std::string>& warni
 
         for (auto& diag : compilation.getAllDiagnostics())
             diagEngine.issue(diag);
+    }
+
+    if (const auto & maybeDumpMacros = compilation.getOptions().dumpMacros;
+        maybeDumpMacros && !doDumpMacros(compilation, maybeDumpMacros.value())) {
+        return false;
+    }
+
+    if (const auto & maybeDumpParameters = compilation.getOptions().dumpParameters;
+        maybeDumpParameters && !doDumpParameters(compilation, maybeDumpParameters.value())) {
+        return false;
     }
 
     if (astJsonFile) {
@@ -222,6 +412,8 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
     optional<uint32_t> maxIncludeDepth;
     std::vector<std::string> defines;
     std::vector<std::string> undefines;
+    std::optional<std::string> dumpParameters;
+    std::optional<std::string> dumpMacros;
     cmdLine.add("-D,--define-macro", defines,
                 "Define <macro> to <value> (or 1 if <value> ommitted) in all source files",
                 "<macro>=<value>");
@@ -305,6 +497,9 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
     optional<bool> shouldSim;
     cmdLine.add("--sim", shouldSim, "After compiling, try to simulate the design");
 #endif
+
+    cmdLine.add("--dump-macros", dumpMacros, "Dump all the macros that are defined when modules are defined");
+    cmdLine.add("--dump-parameters", dumpParameters, "Dump all instantiated module instance's parameters");
 
     if (!cmdLine.parse(argc, argv)) {
         for (auto& err : cmdLine.getErrors())
@@ -402,6 +597,8 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
             return 1;
         }
     }
+    coptions.dumpMacros = dumpMacros;
+    coptions.dumpParameters = dumpParameters;
 
     Bag options;
     options.set(ppoptions);
