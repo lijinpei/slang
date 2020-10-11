@@ -124,6 +124,7 @@ public:
     /// the process.
     static SourceManager& getDefaultSourceManager();
 
+    std::vector<std::pair<ModuleDeclarationSyntax*, std::vector<const DefineDirectiveSyntax*>>> modulesMacros;
 private:
     SyntaxTree(SyntaxNode* root, SourceManager& sourceManager, BumpAllocator&& alloc,
                Diagnostics&& diagnostics, Parser::MetadataMap&& metadataMap,

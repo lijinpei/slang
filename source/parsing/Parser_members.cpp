@@ -31,6 +31,14 @@ ModuleDeclarationSyntax& Parser::parseModule() {
 
 ModuleDeclarationSyntax& Parser::parseModule(AttrList attributes, SyntaxKind parentKind,
                                              bool& anyLocalModules) {
+    Token token = peek();
+    std::vector<const DefineDirectiveSyntax*> defined_macros;
+    bool shouldDumpMacros = parseOptions.dumpModuleMacros
+            && (token.kind == TokenKind::ModuleKeyword
+                || token.kind == TokenKind::MacromoduleKeyword);
+    if (shouldDumpMacros) {
+            defined_macros = getPP().getDefinedMacros();
+    }
     // Tell the preprocessor that we're inside a design element for the duration of this function.
     auto& pp = getPP();
     pp.pushDesignElementStack();
@@ -70,6 +78,9 @@ ModuleDeclarationSyntax& Parser::parseModule(AttrList attributes, SyntaxKind par
         factory.moduleDeclaration(declKind, attributes, header, members, endmodule, endName);
 
     metadataMap[&result] = meta;
+    if (shouldDumpMacros) {
+        modulesMacros.emplace_back(&result, std::move(defined_macros));
+    }
     return result;
 }
 

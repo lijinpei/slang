@@ -91,9 +91,11 @@ std::shared_ptr<SyntaxTree> SyntaxTree::create(SourceManager& sourceManager,
             return create(sourceManager, sources, options, false);
     }
 
-    return std::shared_ptr<SyntaxTree>(new SyntaxTree(
+    auto res = std::shared_ptr<SyntaxTree>(new SyntaxTree(
         root, sourceManager, std::move(alloc), std::move(diagnostics), parser.getMetadataMap(),
         parser.getGlobalInstantiations(), options, parser.getEOFToken()));
+    res->modulesMacros = parser.modulesMacros;
+    return res;
 }
 
 } // namespace slang

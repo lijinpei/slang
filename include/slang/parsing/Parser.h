@@ -15,6 +15,9 @@
 #include "slang/syntax/SyntaxFacts.h"
 #include "slang/util/Bag.h"
 
+#include <vector>
+#include <utility>
+
 namespace slang {
 
 class Preprocessor;
@@ -84,6 +87,7 @@ struct ParserOptions {
     /// The maximum depth of nested language constructs (statements, exceptions) before
     /// we give up for fear of stack overflow.
     uint32_t maxRecursionDepth = 1024;
+    bool dumpModuleMacros = false;
 };
 
 /// Implements a full syntax parser for SystemVerilog.
@@ -135,6 +139,7 @@ public:
     /// roots of the design.
     NameSet&& getGlobalInstantiations() { return std::move(globalInstances); }
 
+    std::vector<std::pair<ModuleDeclarationSyntax*, std::vector<const DefineDirectiveSyntax*>>> modulesMacros;
 private:
     using ExpressionOptions = detail::ExpressionOptions;
     using NameOptions = detail::NameOptions;

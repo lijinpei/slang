@@ -120,6 +120,44 @@ static bool doDumpMacros(Compilation& compilation, const std::string& path) {
     if (!ensureFile(fout, path)) {
         return false;
     }
+    auto indent = [&]() {
+        for (int i = 0; i < 4; ++i) {
+            fout << ' ';
+        }
+    };
+    auto syntaxTrees = compilation.getSyntaxTrees();
+    for (const auto & syntaxTree: syntaxTrees) {
+        for (const auto & pair: syntaxTree->modulesMacros) {
+            auto * modDecl = pair.first;
+            const auto& vec = pair.second;
+            fout << modDecl->header->name.rawText() << '\n';
+            for (const auto* def: vec) {
+                indent();
+                // TODO: round trip to source
+                fout << def->name.rawText();
+                // maybe dump formal arguments
+                if (def->formalArguments) {
+                    fout << '(';
+                    bool first = true;
+                    for (auto argTok: def->formalArguments->args) {
+                        if (!first) {
+                            fout << ", ";
+                        }
+                        first = false;
+                        fout << argTok->name.rawText();
+                    }
+                    fout << ')';
+                }
+                fout << " : ";
+                // dump body
+                for (Token tok: def->body) {
+                    fout << tok.rawText();
+                    fout << ' ';
+                }
+                fout << '\n';
+            }
+        }
+    }
     return true;
 }
 template <typename T>
@@ -283,7 +321,7 @@ static bool doDumpParameters(Compilation& compilation, const std::string& path) 
 
 bool runCompiler(Compilation& compilation, const std::vector<std::string>& warningOptions,
                  uint32_t errorLimit, bool quiet, bool onlyParse, bool showColors,
-                 const optional<std::string>& astJsonFile) {
+                 const optional<std::string>& astJsonFile, const std::optional<std::string>& dumpModuleMacros) {
     DiagnosticEngine diagEngine(*compilation.getSourceManager());
     Diagnostics optionDiags = diagEngine.setWarningOptions(warningOptions);
     Diagnostics pragmaDiags = diagEngine.setMappingsFromPragmas();
@@ -318,8 +356,7 @@ bool runCompiler(Compilation& compilation, const std::vector<std::string>& warni
             diagEngine.issue(diag);
     }
 
-    if (const auto & maybeDumpMacros = compilation.getOptions().dumpMacros;
-        maybeDumpMacros && !doDumpMacros(compilation, maybeDumpMacros.value())) {
+    if (dumpModuleMacros && !doDumpMacros(compilation, dumpModuleMacros.value())) {
         return false;
     }
 
@@ -413,7 +450,7 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
     std::vector<std::string> defines;
     std::vector<std::string> undefines;
     std::optional<std::string> dumpParameters;
-    std::optional<std::string> dumpMacros;
+    std::optional<std::string> dumpModuleMacros;
     cmdLine.add("-D,--define-macro", defines,
                 "Define <macro> to <value> (or 1 if <value> ommitted) in all source files",
                 "<macro>=<value>");
@@ -498,7 +535,7 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
     cmdLine.add("--sim", shouldSim, "After compiling, try to simulate the design");
 #endif
 
-    cmdLine.add("--dump-macros", dumpMacros, "Dump all the macros that are defined when modules are defined");
+    cmdLine.add("--dump-macros", dumpModuleMacros, "Dump all the macros that are defined when modules are defined");
     cmdLine.add("--dump-parameters", dumpParameters, "Dump all instantiated module instance's parameters");
 
     if (!cmdLine.parse(argc, argv)) {
@@ -565,6 +602,9 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
     ParserOptions poptions;
     if (maxParseDepth.has_value())
         poptions.maxRecursionDepth = *maxParseDepth;
+    if (dumpModuleMacros) {
+        poptions.dumpModuleMacros = true;
+    }
 
     CompilationOptions coptions;
     coptions.suppressUnused = false;
@@ -597,7 +637,6 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
             return 1;
         }
     }
-    coptions.dumpMacros = dumpMacros;
     coptions.dumpParameters = dumpParameters;
 
     Bag options;
@@ -654,7 +693,7 @@ int driverMain(int argc, TArgs argv, bool suppressColors) try {
             }
 
             anyErrors = !runCompiler(compilation, warningOptions, errorLimit.value_or(20),
-                                     quiet == true, onlyParse == true, showColors, astJsonFile);
+                                     quiet == true, onlyParse == true, showColors, astJsonFile, dumpModuleMacros);
 
 #if defined(INCLUDE_SIM)
             if (!anyErrors && !onlyParse.value_or(false) && shouldSim == true) {
@@ -757,7 +796,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     compilation.addSyntaxTree(SyntaxTree::fromText(text, "<source>"));
 
     runCompiler(compilation, {}, 0, /* quiet */ false, /* onlyParse */ false,
-                /* showColors */ false, {});
+                /* showColors */ false, {}, {});
 
     return 0;
 }
