@@ -24,6 +24,8 @@
 #include "slang/util/String.h"
 #include "slang/util/Version.h"
 
+#include "kernel/yosys.h"
+
 #if defined(INCLUDE_SIM)
 #    include "slang/codegen/JIT.h"
 #    include "slang/mir/MIRBuilder.h"
@@ -190,6 +192,8 @@ bool runSim(Compilation& compilation) {
 
 template<typename TArgs>
 int driverMain(int argc, TArgs argv, bool suppressColors) try {
+        Yosys::yosys_setup();
+        Yosys::yosys_shutdown();
     CommandLine cmdLine;
 
     // General

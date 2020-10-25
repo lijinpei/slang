@@ -1,5 +1,6 @@
 add_executable(driver driver/driver.cpp)
 target_link_libraries(driver PRIVATE slangcompiler)
+target_link_with_yosys(driver)
 if(STATIC_BUILD)
     target_link_libraries(driver PRIVATE -static -Wl,--whole-archive -lpthread -Wl,--no-whole-archive)
 endif()
