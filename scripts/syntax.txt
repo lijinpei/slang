@@ -77,8 +77,12 @@ token tagged
 token memberName
 Pattern? pattern
 
+ParenthesizedPattern base=Pattern
+token openParen
+Pattern pattern
+token closeParen
+
 StructurePatternMember final=false
-empty
 
 OrderedStructurePatternMember base=StructurePatternMember
 Pattern pattern
@@ -88,9 +92,14 @@ token name
 token colon
 Pattern pattern
 
-StructurePattern base=Pattern
+OrderedStructurePattern base=Pattern
 token openBrace
-separated_list<StructurePatternMember> members
+separated_list<OrderedStructurePatternMember> members
+token closeBrace
+
+NamedStructurePattern base=Pattern
+token openBrace
+separated_list<NamedStructurePatternMember> members
 token closeBrace
 
 MatchesClause

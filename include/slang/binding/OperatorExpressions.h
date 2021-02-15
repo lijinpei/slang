@@ -6,6 +6,7 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/binding/Expression.h"
 
 namespace slang {
@@ -102,13 +103,12 @@ struct ConditionalExpressionSyntax;
 /// Represents a conditional operator expression.
 class ConditionalExpression : public Expression {
 public:
-    ConditionalExpression(const Type& type, Expression& pred, Expression& left, Expression& right,
+    ConditionalExpression(const Type& type, ConditionalPredicate& pred, Expression& left, Expression& right,
                           SourceRange sourceRange) :
         Expression(ExpressionKind::ConditionalOp, type, sourceRange),
-        pred_(&pred), left_(&left), right_(&right) {}
+        pred_(pred), left_(&left), right_(&right) {}
 
-    const Expression& pred() const { return *pred_; }
-    Expression& pred() { return *pred_; }
+    ConditionalPredicate& pred() const { return pred_; }
 
     const Expression& left() const { return *left_; }
     Expression& left() { return *left_; }
@@ -137,7 +137,7 @@ public:
     }
 
 private:
-    Expression* pred_;
+    ConditionalPredicate& pred_;
     Expression* left_;
     Expression* right_;
 };

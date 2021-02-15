@@ -6,6 +6,7 @@
 //------------------------------------------------------------------------------
 #include "slang/symbols/ASTSerializer.h"
 
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/compilation/Compilation.h"
 #include "slang/symbols/ASTVisitor.h"
 
@@ -33,6 +34,18 @@ void ASTSerializer::serialize(const TimingControl& timing) {
 
 void ASTSerializer::serialize(const Constraint& constraint) {
     constraint.visit(*this);
+}
+
+void ASTSerializer::serialize(const ConditionalPredicate& pred) {
+    writer.startArray();
+    for (const auto& member : pred) {
+        member->expr->visit(*this);
+    }
+    writer.endArray();
+}
+
+void ASTSerializer::serialize(const MatchedPattern& pattern) {
+    pattern.visit(*this);
 }
 
 void ASTSerializer::serialize(string_view value) {
@@ -95,6 +108,16 @@ void ASTSerializer::write(string_view name, const TimingControl& value) {
 }
 
 void ASTSerializer::write(string_view name, const Constraint& value) {
+    writer.writeProperty(name);
+    serialize(value);
+}
+
+void ASTSerializer::write(string_view name, const ConditionalPredicate& value) {
+    writer.writeProperty(name);
+    serialize(value);
+}
+
+void ASTSerializer::write(string_view name, const MatchedPattern& value) {
     writer.writeProperty(name);
     serialize(value);
 }
@@ -211,6 +234,62 @@ void ASTSerializer::visit(const T& elem) {
 
         writer.endObject();
     }
+}
+
+void ASTSerializer::visit(const MatchedPattern& pattern) {
+    pattern.visit(*this);
+}
+
+void ASTSerializer::visit(const VariablePattern& elem) {
+    writer.startObject();
+    write("kind"sv, toString(static_cast<const MatchedPattern&>(elem).kind));
+    write("symbol"sv, elem.symbol);
+    writer.endObject();
+}
+
+void ASTSerializer::visit(const WildcardPattern& elem) {
+    writer.startObject();
+    write("kind"sv, toString(static_cast<const MatchedPattern&>(elem).kind));
+    writer.endObject();
+}
+
+void ASTSerializer::visit(const ExpressionPattern& elem) {
+    writer.startObject();
+    write("kind"sv, toString(static_cast<const MatchedPattern&>(elem).kind));
+    write("expr"sv, *elem.expr);
+    writer.endObject();
+}
+
+void ASTSerializer::visit(const TaggedPattern& elem) {
+    writer.startObject();
+    write("kind"sv, toString(static_cast<const MatchedPattern&>(elem).kind));
+    write("tag"sv, elem.tag);
+    write("sub_pattern>", elem.subPattern);
+    writer.endObject();
+}
+
+void ASTSerializer::visit(const OrderedStructurePattern& elem) {
+    writer.startObject();
+    write("kind"sv, toString(static_cast<const MatchedPattern&>(elem).kind));
+    writer.writeProperty("members"sv);
+    writer.startArray();
+    for (const auto* pattern : elem.patterns) {
+        visit(*pattern);
+    }
+    writer.endArray();
+    writer.endObject();
+}
+
+void ASTSerializer::visit(const NamedStructurePattern& elem) {
+    writer.startObject();
+    write("kind"sv, toString(static_cast<const MatchedPattern&>(elem).kind));
+    writer.writeProperty("members"sv);
+    writer.startObject();
+    for (const auto& pattern : elem.namedPatterns) {
+        write(pattern.first, *pattern.second);
+    }
+    writer.endObject();
+    writer.endObject();
 }
 
 void ASTSerializer::visitInvalid(const Expression& expr) {

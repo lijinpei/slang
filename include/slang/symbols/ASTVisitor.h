@@ -6,7 +6,10 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <iostream>
+
 #include "slang/binding/AssignmentExpressions.h"
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/binding/Constraints.h"
 #include "slang/binding/LiteralExpressions.h"
 #include "slang/binding/MiscExpressions.h"
@@ -160,6 +163,9 @@ decltype(auto) Symbol::visit(TVisitor&& visitor, Args&&... args) const {
         SYMBOL(UnknownModule);
         SYMBOL(Iterator);
         SYMBOL(ConstraintBlock);
+        SYMBOL(ConditionalPattern);
+        SYMBOL(PatternCaseItem);
+        SYMBOL(PatternBinding);
         TYPE(PredefinedIntegerType);
         TYPE(ScalarType);
         TYPE(FloatingType);
@@ -188,6 +194,38 @@ decltype(auto) Symbol::visit(TVisitor&& visitor, Args&&... args) const {
 #undef SYMBOL
     // clang-format on
     THROW_UNREACHABLE;
+}
+
+template<typename TVisitor, typename... Args>
+decltype(auto) MatchedPattern::visit(TVisitor&& visitor, Args&&... args) const {
+  switch (kind) {
+#define PATTERN(k) case PatternKind::k: return visitor.visit(*static_cast<const k##Pattern*>(this), std::forward<Args>(args)...)
+    PATTERN(Wildcard);
+    PATTERN(Variable);
+    PATTERN(Expression);
+    PATTERN(Tagged);
+    PATTERN(OrderedStructure);
+    PATTERN(NamedStructure);
+#undef PATTERN
+    default:
+      THROW_UNREACHABLE;
+    }
+}
+
+template<typename TVisitor, typename... Args>
+void ConditionalPatternSymbol::visit(TVisitor&& visitor, Args&&... args) const {
+  expr->visit(std::forward<TVisitor>(visitor), std::forward<Args>(args)...);
+  if (pattern) {
+    pattern->visit(std::forward<TVisitor>(visitor), std::forward<Args>(args)...);
+  }
+}
+
+template<typename TVisitor, typename... Args>
+void PatternCaseItemSymbol::visit(TVisitor&& visitor, Args&&... args) const {
+  pattern->visit(std::forward<TVisitor>(visitor), std::forward<Args>(args)...);
+  if (expr) {
+    expr->visit(std::forward<TVisitor>(visitor), std::forward<Args>(args)...);
+  }
 }
 
 template<typename TVisitor, typename... Args>
@@ -315,6 +353,28 @@ void InstanceSymbol::visitExprs(TVisitor&& visitor) const {
         if (conn && !conn->isInterfacePort && conn->expr)
             conn->expr->visit(visitor);
     }
+}
+
+template<typename TVisitor>
+void ConditionalStatement::visitExprs(TVisitor&& visitor) const {
+    cond.visit(visitor);
+}
+
+template<typename TVisitor>
+void CaseStatement::visitExprs(TVisitor&& visitor) const {
+    expr.visit(visitor);
+    std::visit(overloaded{ [&](span<ExpressionItem> items) {
+                              for (auto& item : items) {
+                                  for (auto itemExpr : item.expressions)
+                                      itemExpr->visit(visitor);
+                              }
+                          },
+                           [&](span<PatternItem> items) {
+                               for (auto& item : items) {
+                                   item.pattern->visit(visitor);
+                               }
+                           } },
+               items);
 }
 
 template<typename TVisitor, typename... Args>

@@ -6,9 +6,12 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <variant>
+
 #include "slang/binding/EvalContext.h"
 #include "slang/binding/Expression.h"
 #include "slang/symbols/SemanticFacts.h"
+#include "slang/util/Overloaded.h"
 #include "slang/util/ScopeGuard.h"
 
 namespace slang {
@@ -19,6 +22,7 @@ class TimingControl;
 class VariableSymbol;
 struct ForLoopStatementSyntax;
 struct ForeachLoopStatementSyntax;
+struct ConditionalStatementSyntax;
 struct StatementSyntax;
 
 // clang-format off
@@ -52,6 +56,12 @@ struct StatementSyntax;
     x(ProceduralDeassign)
 ENUM(StatementKind, STATEMENT);
 #undef STATEMENT
+
+#define CASE_ITEM(x) \
+ x(ExpressionOrInsideItem) \
+ x(PatternItem)
+ENUM(CaseStatementItemKind, CASE_ITEM)
+#undef CASE_ITEM
 
 #define CASE_CONDITION(x) \
  x(Normal) \
@@ -178,6 +188,8 @@ public:
 
     const Statement& getStatement(const BindContext& context) const;
     span<const StatementBlockSymbol* const> getBlocks() const { return blocks; }
+    span<const StatementBlockSymbol* const> getTrueBlocks() const { return blocks.subspan(0, trueBlockSize); }
+    span<const StatementBlockSymbol* const> getFalseBlocks() const { return blocks.subspan(trueBlockSize); }
     const StatementSyntax* getSyntax() const;
 
 private:
@@ -187,6 +199,7 @@ private:
     span<const StatementBlockSymbol* const> blocks;
     mutable const Statement* stmt = nullptr;
     SourceRange sourceRange;
+    std::size_t trueBlockSize = 0;
     mutable bool isBinding = false;
     bool labelHandled = false;
     bool inLoop = false;
@@ -378,13 +391,14 @@ public:
 
 struct ConditionalStatementSyntax;
 
+class ConditionalPredicate;
 class ConditionalStatement : public Statement {
 public:
-    const Expression& cond;
+    ConditionalPredicate& cond;
     const Statement& ifTrue;
     const Statement* ifFalse;
 
-    ConditionalStatement(const Expression& cond, const Statement& ifTrue, const Statement* ifFalse,
+    ConditionalStatement(ConditionalPredicate& cond, const Statement& ifTrue, const Statement* ifFalse,
                          SourceRange sourceRange) :
         Statement(StatementKind::Conditional, sourceRange),
         cond(cond), ifTrue(ifTrue), ifFalse(ifFalse) {}
@@ -400,9 +414,7 @@ public:
     static bool isKind(StatementKind kind) { return kind == StatementKind::Conditional; }
 
     template<typename TVisitor>
-    void visitExprs(TVisitor&& visitor) const {
-        cond.visit(visitor);
-    }
+    void visitExprs(TVisitor&& visitor) const;
 
     template<typename TVisitor>
     void visitStmts(TVisitor&& visitor) const {
@@ -413,25 +425,47 @@ public:
 };
 
 struct CaseStatementSyntax;
+class PatternCaseItemSymbol;
 
 class CaseStatement : public Statement {
+    /// helper function to create a pattern-matching case statement from syntax
+    static Statement& fromMatchSyntaxImpl(Compilation& compilation,
+                                          const CaseStatementSyntax& syntax,
+                                          const BindContext& context, StatementContext& stmtCtx,
+                                          CaseStatementCondition condition,
+                                          CaseStatementCheck check);
 public:
-    struct ItemGroup {
+    struct ExpressionItem {
         span<const Expression* const> expressions;
         not_null<const Statement*> stmt;
     };
+    struct PatternItem {
+        not_null<const PatternCaseItemSymbol*> pattern;
+        not_null<const Statement*> stmt;
+    };
+    using ItemGroup = std::variant<span<ExpressionItem>, span<PatternItem>>;
 
     const Expression& expr;
-    span<ItemGroup const> items;
+    ItemGroup items;
     const Statement* defaultCase = nullptr;
+    // itemKind should match items
+    CaseStatementItemKind itemKind;
     CaseStatementCondition condition;
     CaseStatementCheck check;
 
     CaseStatement(CaseStatementCondition condition, CaseStatementCheck check,
-                  const Expression& expr, span<ItemGroup const> items, const Statement* defaultCase,
+                  const Expression& expr, span<ExpressionItem> items, const Statement* defaultCase,
                   SourceRange sourceRange) :
         Statement(StatementKind::Case, sourceRange),
-        expr(expr), items(items), defaultCase(defaultCase), condition(condition), check(check) {}
+        expr(expr), items(items), defaultCase(defaultCase),
+        itemKind(CaseStatementItemKind::ExpressionOrInsideItem), condition(condition), check(check) {}
+
+    CaseStatement(CaseStatementCondition condition, CaseStatementCheck check,
+                  const Expression& expr, span<PatternItem> items, const Statement* defaultCase,
+                  SourceRange sourceRange) :
+        Statement(StatementKind::Case, sourceRange),
+        expr(expr), items(items), defaultCase(defaultCase),
+        itemKind(CaseStatementItemKind::PatternItem), condition(condition), check(check) {}
 
     EvalResult evalImpl(EvalContext& context) const;
     bool verifyConstantImpl(EvalContext& context) const;
@@ -444,20 +478,20 @@ public:
     static bool isKind(StatementKind kind) { return kind == StatementKind::Case; }
 
     template<typename TVisitor>
-    void visitExprs(TVisitor&& visitor) const {
-        expr.visit(visitor);
-        for (auto& item : items) {
-            for (auto itemExpr : item.expressions)
-                itemExpr->visit(visitor);
-        }
-    }
+    void visitExprs(TVisitor&& visitor) const;
 
     template<typename TVisitor>
     void visitStmts(TVisitor&& visitor) const {
-        for (auto& item : items)
-            item.stmt->visit(visitor);
-        if (defaultCase)
+        std::visit(
+            [&](span<auto> items) {
+                for (auto& item : items) {
+                    item.stmt->visit(visitor);
+                }
+            },
+            items);
+        if (defaultCase) {
             defaultCase->visit(visitor);
+        }
     }
 };
 

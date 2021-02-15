@@ -115,6 +115,7 @@ add_library(slangcompiler
     binding/Bitstream.cpp
     binding/Constraints.cpp
     binding/BindContext.cpp
+    binding/ConditionalPredicate.cpp
     binding/EvalContext.cpp
     binding/Expression.cpp
     binding/FormatHelpers.cpp

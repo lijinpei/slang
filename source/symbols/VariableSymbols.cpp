@@ -359,4 +359,12 @@ IteratorSymbol::IteratorSymbol(string_view name, SourceLocation loc, const Type&
     setType(indexType);
 }
 
+void PatternBindingSymbol::serializeTo(ASTSerializer& serializer) const {
+    // FIXME
+    serializer.write("i_am_pattern_binding"sv, "off_course"sv);
+    serializer.write("lifetime", toString(lifetime));
+    serializer.write("isConstant", isConstant);
+    serializer.write("isCompilerGenerated", isCompilerGenerated);
+}
+
 } // namespace slang

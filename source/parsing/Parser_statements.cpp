@@ -207,12 +207,14 @@ CaseStatementSyntax& Parser::parseCaseStatement(NamedLabelSyntax* label, AttrLis
     bool errored = false;
 
     switch (peek().kind) {
-        case TokenKind::MatchesKeyword:
+        case TokenKind::MatchesKeyword: {
             // pattern matching case statement
             matchesOrInside = consume();
+            bool lastMissing = false;
             errored = parseCaseItems(
-                caseKeyword.kind, itemBuffer, [](auto kind) { return isPossiblePattern(kind); },
-                [this] {
+                caseKeyword.kind, itemBuffer,
+                [&lastMissing](auto kind) { return !lastMissing && isPossiblePattern(kind); },
+                [this, &lastMissing] {
                     auto& pattern = parsePattern();
                     Token tripleAnd;
                     ExpressionSyntax* patternExpr = nullptr;
@@ -223,10 +225,12 @@ CaseStatementSyntax& Parser::parseCaseStatement(NamedLabelSyntax* label, AttrLis
                     }
 
                     auto colon = expect(TokenKind::Colon);
+                    lastMissing = colon.isMissing();
                     return &factory.patternCaseItem(pattern, tripleAnd, patternExpr, colon,
                                                     parseStatement());
                 });
             break;
+        }
         case TokenKind::InsideKeyword:
             // range checking case statement
             matchesOrInside = consume();

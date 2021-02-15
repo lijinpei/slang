@@ -47,7 +47,7 @@ public:
     static bool isKind(SymbolKind kind) {
         return kind == SymbolKind::Variable || kind == SymbolKind::FormalArgument ||
                kind == SymbolKind::Field || kind == SymbolKind::ClassProperty ||
-               kind == SymbolKind::Iterator;
+               kind == SymbolKind::Iterator || kind == SymbolKind::PatternBinding;
     }
 
 protected:
@@ -144,6 +144,15 @@ public:
     void serializeTo(ASTSerializer&) const {};
 
     static bool isKind(SymbolKind kind) { return kind == SymbolKind::Iterator; }
+};
+
+class PatternBindingSymbol : public VariableSymbol {
+public:
+    PatternBindingSymbol(string_view name, SourceLocation loc) :
+        VariableSymbol(SymbolKind::PatternBinding, name, loc, VariableLifetime::Automatic) {
+    }
+    void serializeTo(ASTSerializer& serializer) const;
+    static bool isKind(SymbolKind kind) { return kind == SymbolKind::PatternBinding; }
 };
 
 } // namespace slang

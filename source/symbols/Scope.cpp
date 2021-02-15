@@ -139,7 +139,7 @@ void Scope::addDiags(const Diagnostics& diags) const {
     }
 }
 
-void Scope::addMember(const Symbol& symbol) {
+void Scope::addMember(const Symbol& symbol) const {
     // For any symbols that expose a type to the surrounding scope, keep track of it in our
     // deferred data so that we can include enum values in our member list.
     const DeclaredType* declaredType = symbol.getDeclaredType();
@@ -552,6 +552,12 @@ void Scope::handleNameConflict(const Symbol& member, const Symbol*& existing,
                 return;
             }
         }
+    }
+
+    if (existing->kind == SymbolKind::PatternBinding && member.kind == SymbolKind::PatternBinding) {
+        auto& diag = addDiag(diag::DuplicatePatternBinding, member.location);
+        diag.addNote(diag::NotePreviousDefinition, existing->location);
+        return;
     }
 
     if (!isElaborating && existing->isValue() && member.isValue()) {

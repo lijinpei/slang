@@ -34,6 +34,8 @@ public:
                                             const ForLoopStatementSyntax& syntax, bool inLoop);
     static StatementBlockSymbol& fromSyntax(const Scope& scope,
                                             const ForeachLoopStatementSyntax& syntax, bool inLoop);
+    static StatementBlockSymbol& fromSyntax(const Scope&, const CaseStatementSyntax&,
+                                                       bool);
     static StatementBlockSymbol& fromLabeledStmt(const Scope& scope, const StatementSyntax& syntax,
                                                  bool inLoop);
 

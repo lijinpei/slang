@@ -113,6 +113,11 @@ struct CompilationOptions {
     std::vector<std::string> paramOverrides;
 };
 
+struct ConditionalPredicateSyntax;
+struct ConditionalPredicateInfo;
+struct PatternCaseItemSyntax;
+struct PatternCaseItemInfo;
+
 /// A centralized location for creating and caching symbols. This includes
 /// creating symbols from syntax nodes as well as fabricating them synthetically.
 /// Common symbols such as built in types are exposed here as well.
@@ -370,6 +375,22 @@ public:
     int getNextStructSystemId() { return nextStructSystemId++; }
     int getNextUnionSystemId() { return nextUnionSystemId++; }
 
+    ConditionalPredicateInfo* addCondPredInfo(const ConditionalPredicateSyntax& syntax, const Scope& parentScope);
+    ConditionalPredicateInfo* getCondPredInfo(const ConditionalPredicateSyntax& syntax) {
+        auto itor = condPredInfo.find(&syntax);
+        auto* result = itor->second;
+        condPredInfo.erase(itor);
+        return result;
+    }
+
+    PatternCaseItemInfo* addPatternCaseItemInfo(const PatternCaseItemSyntax& syntax, const Scope& parentScope);
+    PatternCaseItemInfo* getPatternCaseItemInfo(const PatternCaseItemSyntax& syntax) {
+        auto itor = patCaseItemInfo.find(&syntax);
+        auto* result = itor->second;
+        patCaseItemInfo.erase(itor);
+        return result;
+    }
+
 private:
     friend class Lookup;
     friend class Scope;
@@ -533,6 +554,12 @@ private:
     // A map from definitions to bind directives that will create
     // instances within those definitions.
     flat_hash_map<const Definition*, std::vector<const BindDirectiveSyntax*>> bindDirectivesByDef;
+
+    // A amp from ConditionalPredicateSyntax to corresponding ConditionalPatternInfo associated with it. The ConditionalPredicateInfo is allocated use Compilation's BumpAllocator
+    flat_hash_map<const ConditionalPredicateSyntax*, struct ConditionalPredicateInfo*> condPredInfo;
+
+    // A amp from PatternCaseItemSyntax to corresponding PatternCaseItemInfo associated with it. The PatternCaseItemInfo is allocated use Compilation's BumpAllocator
+    flat_hash_map<const PatternCaseItemSyntax*, struct PatternCaseItemInfo*> patCaseItemInfo;
 
     // A set tracking all bind directives we've encountered during elaboration,
     // which is used to know when we've seen them all and can stop doing early scanning.

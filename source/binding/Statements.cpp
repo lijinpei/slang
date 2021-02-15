@@ -6,7 +6,11 @@
 //------------------------------------------------------------------------------
 #include "slang/binding/Statements.h"
 
+#include <iostream>
+
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/binding/Expression.h"
+#include "slang/binding/Lookup.h"
 #include "slang/binding/TimingControl.h"
 #include "slang/compilation/Compilation.h"
 #include "slang/diagnostics/ConstEvalDiags.h"
@@ -303,8 +307,34 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
             return;
         }
 
-        case SyntaxKind::CaseStatement:
-            for (auto item : syntax.as<CaseStatementSyntax>().items) {
+        case SyntaxKind::CaseStatement: {
+            const auto& caseStmt = syntax.as<CaseStatementSyntax>();
+            if (caseStmt.matchesOrInside.kind == TokenKind::MatchesKeyword) {
+            // FIXME: check case item kind consistent
+                auto& comp = scope.getCompilation();
+                for (auto item: caseStmt.items) {
+                    switch (item->kind) {
+                        case SyntaxKind::PatternCaseItem: {
+                            auto& patItem = item->as<PatternCaseItemSyntax>();
+                            auto& patItemInfo = *comp.addPatternCaseItemInfo(patItem, scope);
+                            auto& lastScope = patItemInfo.getScope();
+                            patItemInfo.binder.setSyntax(lastScope, *patItem.statement, false, inLoop);
+                            for (auto block: patItemInfo.binder.getBlocks()) {
+                                lastScope.addMember(*block);
+                            }
+                            break;
+                        }
+                        case SyntaxKind::DefaultCaseItem: {
+                            recurse(&item->as<DefaultCaseItemSyntax>().clause->as<StatementSyntax>());
+                            break;
+                        }
+                        default:
+                            THROW_UNREACHABLE;
+                    }
+                }
+                return;
+            }
+            for (auto item : caseStmt.items) {
                 switch (item->kind) {
                     case SyntaxKind::StandardCaseItem:
                         recurse(&item->as<StandardCaseItemSyntax>().clause->as<StatementSyntax>());
@@ -320,9 +350,16 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
                 }
             }
             return;
+        }
         case SyntaxKind::ConditionalStatement: {
             auto& cond = syntax.as<ConditionalStatementSyntax>();
-            recurse(cond.statement);
+            auto& comp = scope.getCompilation();
+            auto& condInfo = *comp.addCondPredInfo(*cond.predicate, scope);
+            auto& lastScope = condInfo.getLastScope();
+            condInfo.binder.setSyntax(lastScope, *cond.statement, false, inLoop);
+            for (auto block: condInfo.binder.getBlocks()) {
+                lastScope.addMember(*block);
+            }
             if (cond.elseClause)
                 recurse(&cond.elseClause->clause->as<StatementSyntax>());
             return;
@@ -660,7 +697,7 @@ Statement& ReturnStatement::fromSyntax(Compilation& compilation,
     // TODO: disallow in parallel blocks
     // Find the parent subroutine.
     const Scope* scope = &context.scope;
-    while (scope->asSymbol().kind == SymbolKind::StatementBlock)
+    while (scope->asSymbol().kind == SymbolKind::StatementBlock || scope->asSymbol().kind == SymbolKind::ConditionalPattern || scope->asSymbol().kind == SymbolKind::PatternCaseItem)
         scope = scope->asSymbol().getParentScope();
 
     auto stmtLoc = syntax.returnKeyword.location();
@@ -835,18 +872,11 @@ Statement& ConditionalStatement::fromSyntax(Compilation& compilation,
     if (conditions.size() == 0) {
         bad = true;
     }
-    else if (conditions.size() > 1) {
-        context.addDiag(diag::NotYetSupported, conditions[1]->sourceRange());
-        bad = true;
-    }
-    else if (conditions[0]->matchesClause) {
-        context.addDiag(diag::NotYetSupported, conditions[0]->matchesClause->sourceRange());
-        bad = true;
-    }
 
     BindFlags ifFlags = BindFlags::None;
     BindFlags elseFlags = BindFlags::None;
-    auto& cond = Expression::bind(*conditions[0]->expr, context);
+    auto& condInfo = *compilation.getCondPredInfo(*syntax.predicate);
+    auto& cond = condInfo.resolveConditionalPredicate(context);
     bad |= cond.bad();
 
     if (!bad && !context.requireBooleanConvertible(cond))
@@ -861,7 +891,8 @@ Statement& ConditionalStatement::fromSyntax(Compilation& compilation,
             ifFlags = BindFlags::UnevaluatedBranch;
     }
 
-    auto& ifTrue = Statement::bind(*syntax.statement, context.resetFlags(ifFlags), stmtCtx);
+    BindContext trueCtx = condInfo.getLastBindContext(context);
+    const auto& ifTrue = condInfo.binder.getStatement(trueCtx.resetFlags(ifFlags));
     const Statement* ifFalse = nullptr;
     if (syntax.elseClause) {
         ifFalse = &Statement::bind(syntax.elseClause->clause->as<StatementSyntax>(),
@@ -908,12 +939,6 @@ void ConditionalStatement::serializeTo(ASTSerializer& serializer) const {
 
 Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStatementSyntax& syntax,
                                      const BindContext& context, StatementContext& stmtCtx) {
-    bool bad = false;
-    if (syntax.matchesOrInside.kind == TokenKind::MatchesKeyword) {
-        context.addDiag(diag::NotYetSupported, syntax.matchesOrInside.range());
-        bad = true;
-    }
-
     CaseStatementCondition condition;
     switch (syntax.caseKeyword.kind) {
         case TokenKind::CaseKeyword:
@@ -946,6 +971,12 @@ Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStateme
         default:
             THROW_UNREACHABLE;
     }
+
+    if (syntax.matchesOrInside.kind == TokenKind::MatchesKeyword) {
+        return fromMatchSyntaxImpl(compilation, syntax, context, stmtCtx, condition, check);
+    }
+
+    bool bad = false;
 
     SmallVectorSized<const ExpressionSyntax*, 8> expressions;
     SmallVectorSized<const Statement*, 8> statements;
@@ -995,7 +1026,7 @@ Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStateme
         condition = CaseStatementCondition::Inside;
     }
 
-    SmallVectorSized<ItemGroup, 8> items;
+    SmallVectorSized<ExpressionItem, 8> items;
     SmallVectorSized<const Expression*, 8> group;
     auto boundIt = bound.begin();
     auto stmtIt = statements.begin();
@@ -1023,6 +1054,52 @@ Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStateme
 
     auto result = compilation.emplace<CaseStatement>(
         condition, check, *expr, items.copy(compilation), defStmt, syntax.sourceRange());
+    if (bad)
+        return badStmt(compilation, result);
+
+    return *result;
+}
+
+Statement& CaseStatement::fromMatchSyntaxImpl(Compilation& compilation,
+                                              const CaseStatementSyntax& syntax,
+                                              const BindContext& context, StatementContext& stmtCtx,
+                                              CaseStatementCondition condition,
+                                              CaseStatementCheck check) {
+    bool bad = false;
+    const auto& expr = Expression::bind(*syntax.expr, context);
+    bad |= expr.bad();
+    //const auto& type = *expr.type;
+    const Statement* defStmt = nullptr;
+    SmallVectorSized<PatternItem, 8> items;
+    for (auto item : syntax.items) {
+        // The parser already errored for non-pattern items, so just ignore if it happens here
+        switch (item->kind) {
+            case SyntaxKind::DefaultCaseItem: {
+                if (defStmt) {
+                    THROW_UNREACHABLE;
+                }
+                defStmt = &Statement::bind(
+                    item->as<DefaultCaseItemSyntax>().clause->as<StatementSyntax>(), context,
+                    stmtCtx);
+                bad |= defStmt->bad();
+                break;
+            }
+            case SyntaxKind::PatternCaseItem: {
+                    const auto& patternItem = item->as<PatternCaseItemSyntax>();
+                    auto& caseItemInfo = *compilation.getPatternCaseItemInfo(patternItem);
+                    auto& caseItem = caseItemInfo.resolvePatternCaseItem(context, expr);
+                    auto& stmt = caseItemInfo.binder.getStatement(caseItem.getBindContext(context));
+                    items.append({&caseItem, &stmt });
+                break;
+            }
+            default:
+                THROW_UNREACHABLE;
+        }
+    }
+
+    auto result = compilation.emplace<CaseStatement>(
+        condition, check, expr, items.copy(compilation), defStmt, syntax.sourceRange());
+    result->itemKind = CaseStatementItemKind::PatternItem;
     if (bad)
         return badStmt(compilation, result);
 
@@ -1067,7 +1144,12 @@ ER CaseStatement::evalImpl(EvalContext& context) const {
     SourceRange matchRange;
     bool unique = check == CaseStatementCheck::Unique || check == CaseStatementCheck::Unique0;
 
-    for (auto& group : items) {
+    // FIXME: evaluation for pattern-matching case statement
+    if (!std::holds_alternative<span<ExpressionItem>>(items)) {
+        return ER::Fail;
+    }
+
+    for (auto& group : std::get<span<ExpressionItem>>(items)) {
         for (auto item : group.expressions) {
             bool matched;
             if (item->kind == ExpressionKind::OpenRange) {
@@ -1129,7 +1211,12 @@ bool CaseStatement::verifyConstantImpl(EvalContext& context) const {
     if (!expr.verifyConstant(context))
         return false;
 
-    for (auto& group : items) {
+    // FIXME: verifyConstantImpl for pattern-matching case statement
+    if (!std::holds_alternative<span<ExpressionItem>>(items)) {
+        return false;
+    }
+
+    for (auto& group : std::get<span<ExpressionItem>>(items)) {
         for (auto item : group.expressions) {
             if (!item->verifyConstant(context))
                 return false;
@@ -1145,23 +1232,35 @@ bool CaseStatement::verifyConstantImpl(EvalContext& context) const {
 }
 
 void CaseStatement::serializeTo(ASTSerializer& serializer) const {
+    serializer.write("itemKind", toString(itemKind));
     serializer.write("condition", toString(condition));
     serializer.write("check", toString(check));
     serializer.write("expr", expr);
     serializer.startArray("items");
-    for (auto const& item : items) {
-        serializer.startObject();
+    std::visit(overloaded{ [&](span<ExpressionItem> items) {
+                              for (auto const& item : items) {
+                                  serializer.startObject();
 
-        serializer.startArray("expressions");
-        for (auto ex : item.expressions) {
-            serializer.serialize(*ex);
-        }
-        serializer.endArray();
+                                  serializer.startArray("expressions");
+                                  for (auto ex : item.expressions) {
+                                      serializer.serialize(*ex);
+                                  }
+                                  serializer.endArray();
 
-        serializer.write("stmt", *item.stmt);
+                                  serializer.write("stmt", *item.stmt);
 
-        serializer.endObject();
-    }
+                                  serializer.endObject();
+                              }
+                          },
+                           [&](span<PatternItem> items) {
+                               for (auto const& item : items) {
+                                   serializer.startObject();
+                                   serializer.write("pattern", *item.pattern);
+                                   serializer.write("stmt", *item.stmt);
+                                   serializer.endObject();
+                               }
+                           } },
+               items);
     serializer.endArray();
 
     if (defaultCase) {

@@ -984,7 +984,7 @@ std::pair<const ClassType*, bool> Lookup::getContainingClass(const Scope& scope)
     const Symbol* parent = &scope.asSymbol();
     bool inStatic = false;
     while (parent->kind == SymbolKind::StatementBlock || parent->kind == SymbolKind::Subroutine ||
-           parent->kind == SymbolKind::ConstraintBlock) {
+           parent->kind == SymbolKind::ConstraintBlock || parent->kind == SymbolKind::ConditionalPattern || parent->kind == SymbolKind::PatternCaseItem) {
         if (parent->kind == SymbolKind::Subroutine) {
             // Remember whether this was a static class method.
             if (parent->as<SubroutineSymbol>().flags & MethodFlags::Static)

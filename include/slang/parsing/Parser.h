@@ -399,6 +399,7 @@ private:
     // Helper class for parsing out numeric literals.
     NumberParser numberParser;
     friend class NumberParser;
+    friend class PatternParser;
 
     // A stack of names of modules declared locally within the given scope.
     // This is used to detect and ignore instantiations of local modules when

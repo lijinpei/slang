@@ -6,9 +6,13 @@
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <iostream>
+#include <type_traits>
+
 #include "slang/diagnostics/CompilationDiags.h"
 #include "slang/diagnostics/DeclarationsDiags.h"
 #include "slang/symbols/ASTVisitor.h"
+#include "slang/symbols/ASTSerializer.h"
 #include "slang/util/StackContainer.h"
 
 namespace slang {

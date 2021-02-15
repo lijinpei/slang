@@ -6,6 +6,7 @@
 //------------------------------------------------------------------------------
 #include "slang/binding/BindContext.h"
 
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/binding/MiscExpressions.h"
 #include "slang/compilation/Compilation.h"
 #include "slang/diagnostics/DeclarationsDiags.h"
@@ -102,6 +103,18 @@ bool BindContext::requireBooleanConvertible(const Expression& expr) const {
     return true;
 }
 
+bool BindContext::requireBooleanConvertible(const ConditionalPredicate& cond) const {
+    // FIXME: add more check
+    for (auto* member: cond) {
+        if (!member->pattern) {
+            if (!requireBooleanConvertible(*member->expr)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 bool BindContext::requireAssignable(const VariableSymbol& var, bool isNonBlocking,
                                     SourceLocation assignLoc, SourceRange varRange) const {
     if (var.isConstant) {
@@ -152,6 +165,14 @@ ConstantValue BindContext::eval(const Expression& expr) const {
 ConstantValue BindContext::tryEval(const Expression& expr) const {
     EvalContext ctx(getCompilation(), EvalFlags::CacheResults);
     return expr.eval(ctx);
+}
+
+ConstantValue BindContext::tryEval(const ConditionalPredicate& pred) const {
+    // FIXME: better constant evaluation for ConditionalPredicate
+    if (pred.size() != 1 || pred[0]->pattern) {
+        return ConstantValue::Invalid;
+    }
+    return tryEval(*pred[0]->expr);
 }
 
 optional<bitwidth_t> BindContext::requireValidBitWidth(const SVInt& value,

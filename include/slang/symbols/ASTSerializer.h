@@ -20,6 +20,14 @@ class Statement;
 class Symbol;
 class Type;
 class TimingControl;
+class ConditionalPredicate;
+class MatchedPattern;
+class WildcardPattern;
+class VariablePattern;
+class ExpressionPattern;
+class TaggedPattern;
+class OrderedStructurePattern;
+class NamedStructurePattern;
 
 class ASTSerializer {
 public:
@@ -33,6 +41,8 @@ public:
     void serialize(const TimingControl& timing);
     void serialize(const Constraint& constraint);
     void serialize(std::string_view value);
+    void serialize(const ConditionalPredicate& pred);
+    void serialize(const MatchedPattern& pattern);
 
     void startArray(string_view name);
     void endArray();
@@ -51,6 +61,8 @@ public:
     void write(string_view name, const Statement& value);
     void write(string_view name, const TimingControl& value);
     void write(string_view name, const Constraint& value);
+    void write(string_view name, const MatchedPattern& value);
+    void write(string_view name, const ConditionalPredicate& value);
 
     void writeLink(string_view name, const Symbol& value);
 
@@ -76,9 +88,24 @@ private:
     friend Statement;
     friend TimingControl;
     friend Constraint;
+    friend MatchedPattern;
+    friend WildcardPattern;
+    friend VariablePattern;
+    friend ExpressionPattern;
+    friend TaggedPattern;
+    friend OrderedStructurePattern;
+    friend NamedStructurePattern;
 
     template<typename T>
     void visit(const T& symbol);
+
+    void visit(const MatchedPattern&);
+    void visit(const WildcardPattern&);
+    void visit(const VariablePattern&);
+    void visit(const ExpressionPattern&);
+    void visit(const TaggedPattern&);
+    void visit(const OrderedStructurePattern&);
+    void visit(const NamedStructurePattern&);
 
     void visitInvalid(const Expression& expr);
     void visitInvalid(const Statement& statement);

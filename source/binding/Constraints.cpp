@@ -6,6 +6,9 @@
 //------------------------------------------------------------------------------
 #include "slang/binding/Constraints.h"
 
+#include <type_traits>
+
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/compilation/Compilation.h"
 #include "slang/diagnostics/StatementsDiags.h"
 #include "slang/symbols/ASTVisitor.h"
@@ -102,7 +105,10 @@ struct DistVarVisitor {
     DistVarVisitor(const BindContext& context) : context(context) {}
 
     template<typename T>
-    void visit(const T& expr) {
+    std::enable_if_t<std::is_base_of_v<MatchedPattern, T>, void> visit(const T&) {}
+
+    template<typename T>
+    std::enable_if_t<!std::is_base_of_v<MatchedPattern, T>, void> visit(const T& expr) {
         switch (expr.kind) {
             case ExpressionKind::NamedValue:
             case ExpressionKind::HierarchicalValue:
@@ -137,7 +143,12 @@ struct ConstraintExprVisitor {
         context(context), isSoft(isSoft) {}
 
     template<typename T>
-    bool visit(const T& expr) {
+    std::enable_if_t<std::is_base_of_v<MatchedPattern, T>, bool> visit(const T&) {
+        return true;
+    }
+
+    template<typename T>
+    std::enable_if_t<!std::is_base_of_v<MatchedPattern, T>, bool> visit(const T& expr) {
         if constexpr (is_detected_v<visitExprs_t, T, ConstraintExprVisitor>)
             expr.visitExprs(*this);
 

@@ -8,6 +8,7 @@
 #include "slang/parsing/Lexer.h"
 #include "slang/parsing/Parser.h"
 #include "slang/parsing/Preprocessor.h"
+#include "slang/util/ScopeGuard.h"
 
 namespace slang {
 
@@ -786,29 +787,330 @@ ArgumentSyntax& Parser::parseArgument(bool isParamAssignment) {
                                                      : parseExpression());
 }
 
-PatternSyntax& Parser::parsePattern() {
-    switch (peek().kind) {
-        case TokenKind::DotStar:
-            return factory.wildcardPattern(consume());
-        case TokenKind::Dot: {
-            auto dot = consume();
-            return factory.variablePattern(dot, expect(TokenKind::Identifier));
+class PatternParser {
+    Parser& parser;
+
+public:
+    PatternParser(Parser& parser) : parser(parser) {}
+
+    template<typename TargetTy, typename ItemTy>
+    TokenOrSyntax transformItem(ItemTy item) {
+        if constexpr (std::is_same_v<ItemTy, Token> || std::is_same_v<TargetTy, ExpressionSyntax> ||
+                      std::is_same_v<TargetTy, AssignmentPatternItemSyntax>) {
+            return item;
         }
-        case TokenKind::TaggedKeyword: {
-            auto tagged = consume();
-            auto name = expect(TokenKind::Identifier);
-            // TODO: optional trailing pattern
-            return factory.taggedPattern(tagged, name, nullptr);
+        else if constexpr (std::is_same_v<TargetTy, NamedStructurePatternMemberSyntax>) {
+            if (AssignmentPatternItemSyntax::isKind(item->kind)) {
+                auto& pattern = item->template as<AssignmentPatternItemSyntax>();
+                return &parser.factory.namedStructurePatternMember(
+                    expectIdentifierOrDefault(*pattern.key), pattern.colon,
+                    toPattern(*pattern.expr));
+            }
+            else {
+                return item;
+            }
         }
-        case TokenKind::ApostropheOpenBrace:
-            // TODO: assignment pattern
-            break;
-        default:
-            break;
+        else if constexpr (std::is_same_v<TargetTy, OrderedStructurePatternMemberSyntax>) {
+            if (ExpressionSyntax::isKind(item->kind)) {
+                auto& expr = item->template as<ExpressionSyntax>();
+                auto& pattern = parser.factory.expressionPattern(expr);
+                return &parser.factory.orderedStructurePatternMember(pattern);
+            }
+            else {
+                return &parser.factory.orderedStructurePatternMember(
+                    item->template as<PatternSyntax>());
+            }
+        }
+        else {
+            (void)item;
+            return Token();
+        }
     }
 
-    // otherwise, it's either an expression or an error (parseExpression will handle that for us)
-    return factory.expressionPattern(parseSubExpression(ExpressionOptions::PatternContext, 0));
+    template<typename T>
+    span<TokenOrSyntax> transferBuffer(const SmallVector<TokenOrSyntax>& buffer) {
+        std::size_t size = buffer.size();
+        auto* ptr = reinterpret_cast<TokenOrSyntax*>(
+            parser.alloc.allocate(sizeof(TokenOrSyntax) * size, alignof(TokenOrSyntax)));
+        auto* ptrBase = ptr;
+        for (const auto& member : buffer) {
+            *(ptr++) =
+                std::visit([&](auto item) -> TokenOrSyntax { return transformItem<T>(item); },
+                           static_cast<const std::variant<Token, SyntaxNode*>&>(member));
+        }
+        return { ptrBase, size };
+    }
+
+    template<typename T>
+    SyntaxNode& finishParseBracePatternOrExpression(Token openBrace,
+                                                    SmallVector<TokenOrSyntax>& buffer,
+                                                    Token closeBrace) {
+        if constexpr (std::is_same_v<T, SimpleAssignmentPatternSyntax>) {
+            return *parser.alloc.emplace<T>(openBrace, transferBuffer<ExpressionSyntax>(buffer),
+                                            closeBrace);
+        }
+        else if constexpr (std::is_same_v<T, StructuredAssignmentPatternSyntax>) {
+            return *parser.alloc.emplace<T>(
+                openBrace, transferBuffer<AssignmentPatternItemSyntax>(buffer), closeBrace);
+        }
+        else if constexpr (std::is_same_v<T, OrderedStructurePatternSyntax>) {
+            return *parser.alloc.emplace<OrderedStructurePatternSyntax>(
+                openBrace, transferBuffer<OrderedStructurePatternMemberSyntax>(buffer), closeBrace);
+        }
+        else {
+            return *parser.alloc.emplace<NamedStructurePatternSyntax>(
+                openBrace, transferBuffer<NamedStructurePatternMemberSyntax>(buffer), closeBrace);
+        }
+    }
+
+    template<typename PatternTy, typename AssignTy>
+    SyntaxNode& finishParseBracePatternOrExpression(bool isPattern, Token openBrace,
+                                                    SmallVector<TokenOrSyntax>& buffer,
+                                                    Token closeBrace) {
+        if (isPattern) {
+            return finishParseBracePatternOrExpression<PatternTy>(openBrace, buffer, closeBrace);
+        }
+        else {
+            return finishParseBracePatternOrExpression<AssignTy>(openBrace, buffer, closeBrace);
+        }
+    }
+
+    /// @return true if the given token represents a possible pattern, expression, comma, or default
+    /// keyword.
+    static bool isPossiblePatternOrExpressionOrCommaOrDefault(TokenKind kind) {
+        switch (kind) {
+            case TokenKind::Comma:
+            case TokenKind::DefaultKeyword:
+            case TokenKind::Dot:
+            case TokenKind::DotStar:
+                return true;
+            default:
+                return SyntaxFacts::isPossibleExpression(kind);
+        }
+    }
+
+    /// @return true if the given token represents a possible pattern, expression, or comma
+    static bool isPossiblePatternOrExpressionOrComma(TokenKind kind) {
+        switch (kind) {
+            case TokenKind::Comma:
+            case TokenKind::Dot:
+            case TokenKind::DotStar:
+                return true;
+            default:
+                return SyntaxFacts::isPossibleExpression(kind);
+        }
+    }
+
+    SyntaxNode& parseNamedPatternItem(SyntaxNode* firstExpr, bool& isPattern) {
+        if (!firstExpr) {
+            if (parser.peek(TokenKind::DefaultKeyword)) {
+                firstExpr = &parser.factory.literalExpression(
+                    SyntaxKind::DefaultPatternKeyExpression, parser.consume());
+            }
+            else {
+                firstExpr = &parsePatternOrExpression(isPattern);
+            }
+        }
+        auto colon = parser.expect(TokenKind::Colon);
+        auto& secondExpr = parsePatternOrExpression(isPattern);
+        if (isPattern) {
+            return parser.factory.namedStructurePatternMember(expectIdentifierOrDefault(*firstExpr),
+                                                              colon, toPattern(secondExpr));
+        }
+        else {
+            return parser.factory.assignmentPatternItem(expectExpression(*firstExpr), colon,
+                                                        expectExpression(secondExpr));
+        }
+    }
+
+    /// note: parse a constant_expression or pattern-matching patrtern that starts with "'{", with
+    /// priority given to ExpressionSyntax when ambiguous. isPattern is set to true when a
+    /// PatternSytnax is returned, and not touched otherwise
+    SyntaxNode& parseBracePatternOrExpression(bool& isPattern_) {
+        bool isPattern = false;
+        auto guard = ScopeGuard([&] { isPattern_ = isPattern_ || isPattern; });
+
+        auto openBrace = parser.expect(TokenKind::ApostropheOpenBrace);
+        auto token = parser.peek();
+        SyntaxNode* firstExpr = nullptr;
+        if (token.kind == TokenKind::DefaultKeyword) {
+            // note: default-keyword not allowd in the BNF of LRM, we support it as an extension
+            firstExpr = &parser.factory.literalExpression(SyntaxKind::DefaultPatternKeyExpression,
+                                                          parser.consume());
+        }
+        else if (token.kind == TokenKind::CloseBrace) {
+            // This is an empty pattern -- we'll just warn and continue on.
+            parser.addDiag(diag::EmptyPatternMatchingPattern, openBrace.location());
+            return parser.factory.orderedStructurePattern(openBrace, span<TokenOrSyntax>{},
+                                                          parser.consume());
+        }
+        else {
+            firstExpr = &parsePatternOrExpression(isPattern);
+        }
+
+        Token closeBrace;
+        SmallVectorSized<TokenOrSyntax, 8> buffer;
+        token = parser.peek();
+
+        switch (token.kind) {
+            case TokenKind::Colon: {
+                auto colon = parser.consume();
+                auto& secondExpression = parsePatternOrExpression(isPattern);
+                if (isPattern) {
+                    buffer.append(&parser.factory.namedStructurePatternMember(
+                        expectIdentifierOrDefault(*firstExpr), colon, toPattern(secondExpression)));
+                }
+                else {
+                    buffer.append(&parser.factory.assignmentPatternItem(
+                        expectExpression(*firstExpr), colon, expectExpression(secondExpression)));
+                }
+                if (parser.peek(TokenKind::Comma)) {
+                    buffer.append(parser.consume());
+                    parser.parseList<isPossiblePatternOrExpressionOrCommaOrDefault,
+                                     SyntaxFacts::isEndOfBracedList>(
+                        buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace,
+                        Parser::RequireItems::False, diag::ExpectedExpressionOrPattern,
+                        [&] { return &parseNamedPatternItem(nullptr, isPattern); });
+                }
+                else {
+                    closeBrace = parser.expect(TokenKind::CloseBrace);
+                }
+                return finishParseBracePatternOrExpression<NamedStructurePatternSyntax,
+                                                           StructuredAssignmentPatternSyntax>(
+                    isPattern, openBrace, buffer, closeBrace);
+            }
+            case TokenKind::OpenBrace: {
+                auto innerOpenBrace = parser.consume();
+                parser.parseList<isPossiblePatternOrExpressionOrComma,
+                                 SyntaxFacts::isEndOfBracedList>(
+                    buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace,
+                    Parser::RequireItems::True, diag::ExpectedExpressionOrPattern,
+                    [&] { return &parsePatternOrExpression(isPattern); });
+                return parser.factory.replicatedAssignmentPattern(
+                    openBrace, firstExpr->as<ExpressionSyntax>(), innerOpenBrace,
+                    transferBuffer<ExpressionSyntax>(buffer), closeBrace,
+                    parser.expect(TokenKind::CloseBrace));
+            }
+            case TokenKind::Comma: {
+                // verification of pattern members is delayed to semantics-analysis
+                buffer.append(firstExpr);
+                buffer.append(parser.consume());
+                parser.parseList<isPossiblePatternOrExpressionOrComma,
+                                 SyntaxFacts::isEndOfBracedList>(
+                    buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace,
+                    Parser::RequireItems::True, diag::ExpectedExpressionOrPattern,
+                    [&] { return &parsePatternOrExpression(isPattern); });
+                return finishParseBracePatternOrExpression<OrderedStructurePatternSyntax,
+                                                           SimpleAssignmentPatternSyntax>(
+                    isPattern, openBrace, buffer, closeBrace);
+            }
+            case TokenKind::CloseBrace: {
+                buffer.append(firstExpr);
+                closeBrace = parser.consume();
+                return finishParseBracePatternOrExpression<OrderedStructurePatternSyntax,
+                                                           SimpleAssignmentPatternSyntax>(
+                    isPattern, openBrace, buffer, closeBrace);
+            }
+            default: {
+                // This is an error case; let the list handling code get us out of it.
+                buffer.append(firstExpr);
+                buffer.append(parser.expect(TokenKind::Comma));
+                parser.parseList<isPossiblePatternOrExpressionOrComma,
+                                 SyntaxFacts::isEndOfBracedList>(
+                    buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace,
+                    Parser::RequireItems::False, diag::ExpectedExpressionOrPattern,
+                    [&] { return &parsePatternOrExpression(isPattern); });
+                return finishParseBracePatternOrExpression<OrderedStructurePatternSyntax,
+                                                           SimpleAssignmentPatternSyntax>(
+                    isPattern, openBrace, buffer, closeBrace);
+            }
+        }
+    }
+    /// note: this function only returns a ExpressionSyntax or PatternSyntax, with priority given to
+    /// ExpressionSyntax when ambiguous. isPattern is set to true when a PatternSytnax is returned,
+    /// and not touched otherwise
+    SyntaxNode& parsePatternOrExpression(bool& isPattern) {
+        switch (parser.peek().kind) {
+            case TokenKind::DotStar:
+                isPattern = true;
+                return parser.factory.wildcardPattern(parser.consume());
+            case TokenKind::Dot: {
+                isPattern = true;
+                auto dot = parser.consume();
+                return parser.factory.variablePattern(dot, parser.expect(TokenKind::Identifier));
+            }
+            case TokenKind::TaggedKeyword: {
+                // note: tagged union expression could not be constant_expression
+                // fixme: maybe allow constant tagged union expression?
+                isPattern = true;
+                auto tagged = parser.consume();
+                auto name = parser.expect(TokenKind::Identifier);
+                // TODO: optional trailing pattern
+                return parser.factory.taggedPattern(tagged, name, nullptr);
+            }
+            case TokenKind::ApostropheOpenBrace:
+                return parseBracePatternOrExpression(isPattern);
+            case TokenKind::OpenParenthesis: {
+                // note: braced-pattern is not included in the BNF of LRM, but
+                // examples in LRM won't complile without braced-pattern
+                auto openParen = parser.consume();
+                auto& sub = parsePatternOrExpression(isPattern);
+                auto closeParen = parser.expect(TokenKind::CloseParenthesis);
+                if (isPattern) {
+                    return parser.factory.parenthesizedPattern(openParen, sub.as<PatternSyntax>(),
+                                                        closeParen);
+                }
+                else {
+                    return parser.factory.parenthesizedExpression(
+                        openParen, sub.as<ExpressionSyntax>(), closeParen);
+                }
+            }
+            default:
+                return parser.parseSubExpression(Parser::ExpressionOptions::PatternContext, 0);
+        }
+    }
+    // note: the input syntax should be of ExpressionSyntax or PatternSytnax
+    Token expectIdentifierOrDefault(SyntaxNode& syntax) {
+        if (syntax.kind == SyntaxKind::DefaultPatternKeyExpression) {
+            return syntax.as<LiteralExpressionSyntax>().literal;
+        }
+        else if (IdentifierNameSyntax::isKind(syntax.kind)) {
+            return syntax.as<IdentifierNameSyntax>().identifier;
+        }
+        else {
+            parser.addDiag(diag::ExpectedIdentifier, syntax.sourceRange().start());
+            return Token();
+        }
+    }
+    // note: the input syntax should be of ExpressionSyntax or PatternSytnax
+    ExpressionSyntax& expectExpression(SyntaxNode& syntax) {
+        if (!ExpressionSyntax::isKind(syntax.kind)) {
+            parser.addDiag(diag::ExpectedExpression, syntax.sourceRange().start());
+        }
+        return syntax.as<ExpressionSyntax>();
+    }
+    // note: the input syntax should be of ExpressionSyntax or PatternSyntax
+    PatternSyntax& toPattern(SyntaxNode& syntax) {
+        if (PatternSyntax::isKind(syntax.kind)) {
+            return syntax.as<PatternSyntax>();
+        }
+        else {
+            ASSERT(ExpressionSyntax::isKind(syntax.kind));
+            return parser.factory.expressionPattern(syntax.as<ExpressionSyntax>());
+        }
+    }
+};
+
+PatternSyntax& Parser::parsePattern() {
+    bool isPattern = false;
+    PatternParser pparser(*this);
+    auto& syntax = pparser.parsePatternOrExpression(isPattern);
+    if (!isPattern) {
+        return pparser.toPattern(syntax);
+    }
+    else {
+        return syntax.as<PatternSyntax>();
+    }
 }
 
 ConditionalPredicateSyntax& Parser::parseConditionalPredicate(ExpressionSyntax& first,

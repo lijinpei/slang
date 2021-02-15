@@ -1083,4 +1083,16 @@ void Compilation::checkDPIMethods(span<const SubroutineSymbol* const> dpiImports
     }
 }
 
+ConditionalPredicateInfo* Compilation::addCondPredInfo(const ConditionalPredicateSyntax& syntax, const Scope& parentScope) {
+    auto& result = ConditionalPredicateInfo::preBind(*this, syntax, parentScope);
+    condPredInfo.insert(std::pair(&syntax, &result));
+    return &result;
+}
+
+PatternCaseItemInfo* Compilation::addPatternCaseItemInfo(const PatternCaseItemSyntax& syntax, const Scope& parentScope) {
+    auto& result = PatternCaseItemInfo::preBind(*this, syntax, parentScope);
+    patCaseItemInfo.insert(std::pair(&syntax, &result));
+    return &result;
+}
+
 } // namespace slang

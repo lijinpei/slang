@@ -36,7 +36,7 @@ using PointerMap = flat_hash_map<uintptr_t, uintptr_t>;
 class Scope {
 public:
     /// Adds a symbol as a member to the scope.
-    void addMember(const Symbol& symbol);
+    void addMember(const Symbol& symbol) const;
 
     /// Creates and adds one or more member symbols to the scope from the given syntax node.
     void addMembers(const SyntaxNode& syntax);

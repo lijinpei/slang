@@ -891,12 +891,9 @@ Expression& ConditionalExpression::fromSyntax(Compilation& compilation,
                                               const ConditionalExpressionSyntax& syntax,
                                               const BindContext& context,
                                               const Type* assignmentTarget) {
-    if (syntax.predicate->conditions.size() != 1) {
-        context.addDiag(diag::NotYetSupported, syntax.sourceRange());
-        return badExpr(compilation, nullptr);
-    }
-
-    auto& pred = selfDetermined(compilation, *syntax.predicate->conditions[0]->expr, context);
+    // FIXME: scope
+    auto& condInfo = ConditionalPredicateInfo::preBind(compilation, *syntax.predicate, context.scope);
+    auto& pred = condInfo.resolveConditionalPredicate(context);
 
     // If the predicate is known at compile time, we can tell which branch will be unevaluated.
     bitmask<BindFlags> leftFlags = BindFlags::None;
@@ -915,7 +912,7 @@ Expression& ConditionalExpression::fromSyntax(Compilation& compilation,
         rightFlags |= BindFlags::AllowUnboundedLiteral;
     }
 
-    auto& left = create(compilation, *syntax.left, context, leftFlags, assignmentTarget);
+    auto& left = create(compilation, *syntax.left, condInfo.getLastBindContext(context), leftFlags, assignmentTarget);
     auto& right = create(compilation, *syntax.right, context, rightFlags, assignmentTarget);
 
     const Type* lt = left.type;
@@ -927,12 +924,11 @@ Expression& ConditionalExpression::fromSyntax(Compilation& compilation,
 
     // Force four-state return type for ambiguous condition case.
     const Type* resultType = binaryOperatorType(compilation, lt, rt, pred.type->isFourState());
+    bool isBad =
+        pred.bad() || left.bad() || right.bad() || !context.requireBooleanConvertible(pred);
     auto result = compilation.emplace<ConditionalExpression>(*resultType, pred, left, right,
                                                              syntax.sourceRange());
-    if (pred.bad() || left.bad() || right.bad())
-        return badExpr(compilation, result);
-
-    if (!context.requireBooleanConvertible(pred))
+    if (isBad)
         return badExpr(compilation, result);
 
     // If both sides of the expression are numeric, we've already determined the correct

@@ -13,6 +13,7 @@
 namespace slang {
 
 class Compilation;
+class ConditionalPredicate;
 class EvalContext;
 class Expression;
 class InstanceSymbol;
@@ -169,6 +170,7 @@ public:
     bool requirePositive(const SVInt& value, SourceRange range) const;
     bool requireGtZero(optional<int32_t> value, SourceRange range) const;
     bool requireBooleanConvertible(const Expression& expr) const;
+    bool requireBooleanConvertible(const ConditionalPredicate& pred) const;
     bool requireAssignable(const VariableSymbol& var, bool isNonBlocking, SourceLocation assignLoc,
                            SourceRange varRange) const;
     bool requireValidBitWidth(bitwidth_t width, SourceRange range) const;
@@ -176,6 +178,7 @@ public:
 
     ConstantValue eval(const Expression& expr) const;
     ConstantValue tryEval(const Expression& expr) const;
+    ConstantValue tryEval(const ConditionalPredicate& expr) const;
 
     optional<int32_t> evalInteger(const ExpressionSyntax& syntax) const;
     optional<int32_t> evalInteger(const Expression& expr) const;

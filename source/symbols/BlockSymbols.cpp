@@ -6,6 +6,7 @@
 //------------------------------------------------------------------------------
 #include "slang/symbols/BlockSymbols.h"
 
+#include "slang/binding/ConditionalPredicate.h"
 #include "slang/binding/Expression.h"
 #include "slang/compilation/Compilation.h"
 #include "slang/diagnostics/DeclarationsDiags.h"
@@ -109,6 +110,11 @@ StatementBlockSymbol& StatementBlockSymbol::fromSyntax(const Scope& scope,
     result->setNeedElaboration();
 
     return *result;
+}
+
+StatementBlockSymbol& StatementBlockSymbol::fromSyntax(const Scope&, const CaseStatementSyntax&,
+                                                       bool) {
+    THROW_UNREACHABLE;
 }
 
 StatementBlockSymbol& StatementBlockSymbol::fromLabeledStmt(const Scope& scope,
